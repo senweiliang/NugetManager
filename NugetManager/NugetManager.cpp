@@ -103,7 +103,7 @@ void NugetManager::on_pushButton_select_clicked()
 
     QString content = QString::fromUtf8(file.readAll());
     file.close();
-    QRegExp regExp(R"(= \"(\w*)\", \"(.*\.vcxproj)\")");
+    QRegExp regExp(R"(= \"(.*)\", \"(.*\.vcxproj)\")");
     regExp.setMinimal(true);//Qt中设置正则非贪婪模式
     int pos = 0;
     ui.comboBox_proj->clear();
