@@ -10,7 +10,7 @@
 #include <QJsonDocument>
 
 NugetManager::NugetManager(QWidget* parent)
-    : QMainWindow(parent), state(Default), process(new QProcess(this)), bCopyReleasePdb(true), bStaticLib(false)
+    : QMainWindow(parent), state(Default), process(new QProcess(this)), bCopyReleasePdb(true), bStaticLib(false), bExit(false)
 {
     ui.setupUi(this);
     qsrand((quint32)time(0));//避免程序首次运行时start内CreateNamePipe失败
@@ -34,6 +34,7 @@ NugetManager::NugetManager(QWidget* parent)
 
 NugetManager::~NugetManager()
 {
+    bExit = true;
     restoreFile();
     QJsonDocument doc = QJsonDocument::fromJson(configJson.toUtf8());
 
@@ -54,6 +55,13 @@ NugetManager::~NugetManager()
 
     file.write(doc.toJson());
     file.close();
+
+    if (process->state() == QProcess::Running)
+    {
+        process->kill();
+        delete process;
+        process = nullptr;
+    }
 }
 
 void NugetManager::onProjChanged()
@@ -121,13 +129,15 @@ void NugetManager::on_pushButton_select_clicked()
 
 void NugetManager::showError(QString s)
 {
-    //QErrorMessage* dialog = new QErrorMessage(this);
-    //dialog->setWindowTitle("错误");
-    //dialog->showMessage(s);
-    //state = Default;
+    //强制退出程序
+    if (bExit)
+    {
+        return;
+    }
+
     Utilities::showError(s, this);
 
-    if (state >= BuildDebug)
+    if (state == BuildDebug || state == BuildRelease)
         restoreFile();
 
     if (state <= NugetPack)
@@ -136,6 +146,12 @@ void NugetManager::showError(QString s)
 
 void NugetManager::on_pushButton_build_clicked()
 {
+    if (process->state() == QProcess::Running)
+    {
+        Utilities::showError(tr("进程正在运行"), this);
+        return;
+    }
+
     ID = ui.lineEdit_id->text();
     version = ui.lineEdit_version->text();
     desc = ui.plainTextEdit_desc->toPlainText();
@@ -182,6 +198,10 @@ void NugetManager::on_pushButton_build_clicked()
     {
         bStaticLib = true;
     }
+    else
+    {
+        bStaticLib = false;
+    }
 
     QString tempContent = vcxprojContent;
     int pos = tempContent.lastIndexOf("</Project>");
@@ -202,7 +222,7 @@ void NugetManager::on_pushButton_build_clicked()
     file.write(tempContent.toUtf8());
     file.close();
     //开始工作
-    ui.textBrowser->insertPlainText("====== 开始构建Debug ======");
+    print("====== 开始构建Debug ======");
     state = BuildDebug;
     QStringList args = { slnPath, "/Build", "Debug|x64", "/Project", projName};
     process->start("devenv.com", args);//必须是com否则无法读取输出
@@ -242,7 +262,7 @@ void NugetManager::onProcessFinished(int exitCode, QProcess::ExitStatus exitStat
 
     if (state == BuildDebug)
     {
-        ui.textBrowser->insertPlainText("====== 开始构建Release ======");
+        print("====== 开始构建Release ======");
         state = BuildRelease;
         QStringList args = { slnPath, "/Build", "Release|x64", "/Project", projName };
         process->start("devenv.com", args);
@@ -322,7 +342,7 @@ void NugetManager::onProcessFinished(int exitCode, QProcess::ExitStatus exitStat
 void NugetManager::onReadyRead()
 {
     QString line = QString::fromLocal8Bit(process->readAllStandardOutput());
-    ui.textBrowser->insertPlainText(line);//此接口不自动换行
+    print(line);//此接口不自动换行
     printError(QString::fromLocal8Bit(process->readAllStandardError()));
     ui.textBrowser->moveCursor(QTextCursor::End);
 }
@@ -335,6 +355,16 @@ void NugetManager::printError(QString s)
     }
 
     ui.textBrowser->insertHtml(QString(R"(<font color="red">%1</font><br>)").arg(s));
+}
+
+void NugetManager::print(QString s)
+{
+    if (s.isEmpty())
+    {
+        return;
+    }
+
+    ui.textBrowser->insertPlainText(s);
 }
 
 void NugetManager::restoreFile()
@@ -401,7 +431,7 @@ bool NugetManager::createNuspecFile()
         <file src="build\native\lib\**\*.*"       target="build\native\lib"     />
         <file src="build\native\include\**\*.*"   target="build\native\include" />
         <file src="build\native\bin\**\*.*"            target="build\native\bin"     />
-        <file src="build\native\%6.props"		  target="build\native" />
+        <file src="build\native\%6.targets"		  target="build\native" />
     </files>
 </package>)").arg(ID).arg(version).arg(desc).arg(authors).arg(dependencies).arg(projName);
 
@@ -418,7 +448,7 @@ bool NugetManager::createNuspecFile()
 
 bool NugetManager::createPropsFile()
 {
-    QFile file(QString("./nuget/build/native/%1.props").arg(projName));
+    QFile file(QString("./nuget/build/native/%1.targets").arg(projName));
 
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
     {
@@ -606,14 +636,23 @@ bool NugetManager::copyFiles()
             {
                 bCopyReleasePdb = false;
             }
-
-            ui.textBrowser->insertPlainText(QString(tr("拷贝%1到%2时出错")).arg(copyInfo.first).arg(copyInfo.second));
+            else
+            {
+                printError(QString(tr("拷贝%1到%2时出错")).arg(copyInfo.first).arg(copyInfo.second));
+                return false;
+            }
         }
     }
 
-    QString srcDir = QString("%1/%2/include").arg(srcBase).arg(projName);
+    QString srcDir = QString("%1/include").arg(QFileInfo(projPath).absolutePath());
     QString dstDir = QString("%1/include").arg(dstBase).arg(projName);
-    copyDir(srcDir, dstDir);
+
+    if (!copyDir(srcDir, dstDir))
+    {
+        printError(QString(tr("拷贝%1到%2时出错")).arg(srcDir).arg(dstDir));
+        return false;
+    }
+
     return true;
 }
 
@@ -638,12 +677,15 @@ void NugetManager::updateNugetInfo()
 void NugetManager::updateSource()
 {
     sourceMap = Utilities::getSourceMap();
+    QString currentText = ui.comboBox_source->currentText();
     ui.comboBox_source->clear();
 
     for (const auto& name : sourceMap.keys())
     {
         ui.comboBox_source->addItem(name, sourceMap[name]);
     }
+
+    ui.comboBox_source->setCurrentText(currentText);
 }
 
 void NugetManager::setDefaultSource()

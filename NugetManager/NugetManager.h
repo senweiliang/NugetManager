@@ -35,6 +35,7 @@ private:
     bool createDirTree();
     bool copyFiles();
     void printError(QString s);
+    void print(QString s);
     void updateSource();
     void setDefaultSource();
     void getPackageVersionMap();
@@ -54,6 +55,7 @@ private:
     QString vcxprojContent;
     bool bCopyReleasePdb;
     bool bStaticLib;
+    bool bExit;
     QString configJson;
     QMap<QString, QString> sourceMap;
     QMap<QString/*source name*/, QMap<QString/*package name*/, QString/*version*/>> packageInfoMap; //某一源上的nuget包版本缓存
